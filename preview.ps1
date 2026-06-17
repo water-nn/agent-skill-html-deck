@@ -1,59 +1,98 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = 'Stop'
 
-function Test-PortAvailable {
-  param([int]$Port)
-  try {
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), $Port)
-    $listener.Start()
-    $listener.Stop()
-    return $true
-  }
-  catch {
-    return $false
-  }
-}
+$projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$nodeDir = 'D:\codex\app-local\runtimes\cua_node\789504f803e82e2b\bin'
+$npm = Join-Path $nodeDir 'npm.cmd'
+$ports = 5173..5183
 
-function Find-FreePort {
-  param([int]$StartPort = 5173, [int]$EndPort = 5199)
-  for ($port = $StartPort; $port -le $EndPort; $port++) {
-    if (Test-PortAvailable -Port $port) {
-      return $port
+Set-Location $projectDir
+$env:PATH = "$nodeDir;$env:PATH"
+
+function Test-PreviewReady {
+    param([int]$Port)
+
+    try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port" -UseBasicParsing -TimeoutSec 1
+        return $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+    } catch {
+        return $false
     }
-  }
-  throw "5173 到 5199 这些端口都被占用了。请先关闭其他本地预览窗口，然后再双击打开。"
 }
 
-Write-Host ""
-Write-Host "Agent Skill 网页式 PPT 预览" -ForegroundColor Cyan
-Write-Host "请不要关闭这个黑色命令窗口；它负责保持网页预览运行。" -ForegroundColor Yellow
-Write-Host ""
+Write-Host '正在启动网页式 PPT 预览...' -ForegroundColor Cyan
+Write-Host '这个黑色窗口是本地预览服务，请不要关闭。' -ForegroundColor Yellow
+Write-Host '看完以后，关闭这个窗口即可停止预览。'
+Write-Host ''
 
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Write-Host "没有检测到 Node.js。" -ForegroundColor Red
-  Write-Host "请先安装 Node.js LTS 版本，然后再双击打开预览.cmd。"
-  Read-Host "按回车关闭"
-  exit 1
+$selectedPort = $null
+$alreadyRunning = $false
+
+foreach ($port in $ports) {
+    if (Test-PreviewReady -Port $port) {
+        $selectedPort = $port
+        $alreadyRunning = $true
+        break
+    }
 }
 
-if (-not (Test-Path "node_modules")) {
-  Write-Host "第一次运行需要安装依赖，请稍等..." -ForegroundColor Yellow
-  npm install
+if (-not $selectedPort) {
+    foreach ($port in $ports) {
+        $connection = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -ErrorAction SilentlyContinue
+        if (-not $connection) {
+            $selectedPort = $port
+            break
+        }
+    }
 }
 
-$port = Find-FreePort
-$url = "http://127.0.0.1:$port/"
-
-if ($port -ne 5173) {
-  Write-Host "默认端口 5173 被占用，已自动改用端口 $port。" -ForegroundColor Yellow
+if (-not $selectedPort) {
+    Write-Host '5173 到 5183 这些预览端口都被占用了。' -ForegroundColor Red
+    Write-Host '请关闭其他正在预览的网页项目，或者重启电脑后再双击打开。'
+    Read-Host '按回车键退出'
+    exit 1
 }
 
-Write-Host ""
-Write-Host "浏览器将自动打开：" -ForegroundColor Green
-Write-Host $url -ForegroundColor Cyan
-Write-Host ""
-Write-Host "如果浏览器没有自动打开，请手动复制上面的地址到浏览器。" -ForegroundColor Gray
-Write-Host "要停止预览，请回到这个窗口按 Ctrl + C，然后再关闭窗口。" -ForegroundColor Yellow
-Write-Host ""
+$url = "http://127.0.0.1:$selectedPort"
 
+if ($alreadyRunning) {
+    Write-Host "检测到预览已经在运行，直接打开：$url" -ForegroundColor Green
+} else {
+    Write-Host "使用本地端口：$selectedPort"
+    $process = Start-Process -FilePath $npm `
+        -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', "$selectedPort", '--strictPort') `
+        -WorkingDirectory $projectDir `
+        -NoNewWindow `
+        -PassThru
+
+    $ready = $false
+    for ($i = 0; $i -lt 50; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (Test-PreviewReady -Port $selectedPort) {
+            $ready = $true
+            break
+        }
+        if ($process.HasExited) {
+            Write-Host '预览服务启动失败。请把这个窗口里的报错截图发给 Codex。' -ForegroundColor Red
+            Read-Host '按回车键退出'
+            exit 1
+        }
+    }
+
+    if (-not $ready) {
+        Write-Host '等待预览服务启动超时。请关闭这个窗口后重新双击 打开预览.cmd。' -ForegroundColor Red
+        Read-Host '按回车键退出'
+        exit 1
+    }
+}
+
+Write-Host ''
+Write-Host "浏览器即将打开：$url" -ForegroundColor Green
 Start-Process $url
-npm run dev -- --host 127.0.0.1 --port $port
+Write-Host ''
+Write-Host '提示：'
+Write-Host '1. 如果浏览器没有自动打开，请复制上面的地址到 Chrome 或 Edge。'
+Write-Host '2. 预览期间不要关闭这个黑色窗口。'
+Write-Host '3. 看完后关闭这个窗口即可停止预览。'
+Write-Host ''
+Wait-Event
+

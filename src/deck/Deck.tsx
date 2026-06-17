@@ -1,89 +1,169 @@
-import { AnimatePresence } from 'framer-motion'
-import { Agenda } from './controls/Agenda'
-import { slides } from '../slides'
-import { useDeckNavigation } from './hooks/useDeckNavigation'
-import { useFullscreen } from './hooks/useFullscreen'
-import { SlideFrame } from './SlideFrame'
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { slides } from "../slides";
+
+const clamp = (value: number) => Math.min(Math.max(value, 0), slides.length - 1);
 
 export function Deck() {
-  const {
-    activeIndex,
-    activeSlide,
-    canGoNext,
-    canGoPrevious,
-    goTo,
-    next,
-    previous,
-    progress,
-    total,
-  } = useDeckNavigation()
-  const { isFullscreen, isSupported, toggleFullscreen } = useFullscreen()
+  const [current, setCurrent] = useState(() => {
+    const fromHash = Number.parseInt(window.location.hash.replace("#/", ""), 10);
+    return Number.isFinite(fromHash) ? clamp(fromHash) : 0;
+  });
+  const [agendaOpen, setAgendaOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
+
+  const activeSlide = slides[current];
+  const progress = useMemo(() => ((current + 1) / slides.length) * 100, [current]);
+
+  const goTo = useCallback((index: number) => {
+    setCurrent(clamp(index));
+  }, []);
+
+  const next = useCallback(() => goTo(current + 1), [current, goTo]);
+  const previous = useCallback(() => goTo(current - 1), [current, goTo]);
+
+  useEffect(() => {
+    window.history.replaceState(null, "", `#/${current}`);
+  }, [current]);
+
+  useEffect(() => {
+    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+        event.preventDefault();
+        next();
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        previous();
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        goTo(0);
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        goTo(slides.length - 1);
+      }
+      if (event.key.toLowerCase() === "a") {
+        setAgendaOpen((open) => !open);
+      }
+      if (event.key === "Escape") {
+        setAgendaOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [goTo, next, previous]);
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen?.();
+      return;
+    }
+
+    await document.exitFullscreen?.();
+  };
 
   return (
-    <main className={`deck-shell ${isFullscreen ? 'deck-shell-fullscreen' : ''}`}>
-      <div className="animated-background" aria-hidden="true">
-        <div className="mesh mesh-a" />
-        <div className="mesh mesh-b" />
-        <div className="mesh mesh-c" />
+    <main className={`deck-shell ${isFullscreen ? "is-fullscreen" : ""}`}>
+      <div className="ambient-background" aria-hidden="true">
+        <div className="aurora aurora-one" />
+        <div className="aurora aurora-two" />
+        <div className="aurora aurora-three" />
+        <div className="grid-layer" />
         <div className="noise-layer" />
       </div>
 
-      <header className="deck-topbar print:hidden">
-        <div>
-          <p className="font-mono text-xs uppercase tracking-[0.34em] text-cyanGlow">
-            Codex Skill Lab
-          </p>
-          <p className="mt-1 text-sm text-slate-400">网页式 PPT 测试项目</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            className="control-button"
-            disabled={!canGoPrevious}
-            onClick={previous}
-            type="button"
-          >
-            上一页
+      <div className="deck-stage">
+        <header className="no-print deck-header">
+          <button className="control-button" type="button" onClick={() => setAgendaOpen(true)} aria-label="打开目录">
+            Agenda
           </button>
-          <button className="control-button" disabled={!canGoNext} onClick={next} type="button">
-            下一页
+          <div className="deck-brand">Agent Skill Deck</div>
+          <button className="control-button" type="button" onClick={toggleFullscreen} aria-pressed={isFullscreen}>
+            {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           </button>
-          <button
-            className="control-button control-button-primary"
-            disabled={!isSupported}
-            onClick={toggleFullscreen}
-            type="button"
-          >
-            {isFullscreen ? '退出全屏' : '全屏'}
-          </button>
-        </div>
-      </header>
+        </header>
 
-      <div className="deck-layout">
-        <Agenda activeIndex={activeIndex} onSelect={goTo} />
-        <div className="deck-stage screen-stage">
-          <AnimatePresence mode="wait">
-            <SlideFrame slide={activeSlide} index={activeIndex} total={total} />
-          </AnimatePresence>
-        </div>
+        <section className="slide-frame" aria-live="polite">
+          <div>
+            <div className="slide-heading-row">
+              <div>
+                <p className="slide-kicker">{activeSlide.kicker}</p>
+                <h1 className="slide-title">{activeSlide.title}</h1>
+              </div>
+              <div className="slide-count">
+                {String(current + 1).padStart(2, "0")} / {String(slides.length).padStart(2, "0")}
+              </div>
+            </div>
+            <div className="slide-content animate-slide-in" key={activeSlide.id}>
+              {activeSlide.content}
+            </div>
+          </div>
+
+          <footer className="slide-footer">
+            <span>{activeSlide.section}</span>
+            <span>← / → 翻页 · A 打开目录 · Ctrl + P 导出 PDF</span>
+          </footer>
+        </section>
+
+        <nav className="no-print deck-nav" aria-label="幻灯片导航">
+          <button className="control-button" type="button" onClick={previous} disabled={current === 0}>
+            Previous
+          </button>
+          <div className="progress-track" aria-label={`进度 ${Math.round(progress)}%`}>
+            <div className="progress-fill" style={{ width: `${progress}%` }} />
+          </div>
+          <button className="control-button" type="button" onClick={next} disabled={current === slides.length - 1}>
+            Next
+          </button>
+        </nav>
       </div>
 
-      <div className="print-deck" aria-label="打印版完整演示文稿">
+      <aside className={`agenda-panel no-print ${agendaOpen ? "is-open" : ""}`} aria-hidden={!agendaOpen}>
+        <div className="agenda-header">
+          <h2>Agenda</h2>
+          <button className="control-button" type="button" onClick={() => setAgendaOpen(false)}>
+            Close
+          </button>
+        </div>
+        <div className="agenda-list">
+          {slides.map((slide, index) => (
+            <button
+              key={slide.id}
+              type="button"
+              className={`agenda-item ${index === current ? "is-active" : ""}`}
+              onClick={() => {
+                goTo(index);
+                setAgendaOpen(false);
+              }}
+            >
+              <div className="agenda-section">{slide.section}</div>
+              <div className="agenda-title">{slide.title}</div>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      <div className="print-only">
         {slides.map((slide, index) => (
-          <SlideFrame key={slide.id} slide={slide} index={index} total={total} />
+          <section className="print-slide" key={slide.id}>
+            <p>{slide.kicker}</p>
+            <h1>{slide.title}</h1>
+            <div>{slide.content}</div>
+            <footer>
+              {index + 1} / {slides.length}
+            </footer>
+          </section>
         ))}
       </div>
-
-      <footer className="deck-footer print:hidden">
-        <div className="progress-track">
-          <div
-            className="progress-fill"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <p className="font-mono text-xs text-slate-400">
-          {activeIndex + 1} / {slides.length}
-        </p>
-      </footer>
     </main>
-  )
+  );
 }
+
